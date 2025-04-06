@@ -1,15 +1,14 @@
 import torch
-import torch.optim as optim
 import torch.nn as nn
+import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import gym
 
-# Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Policy network
+# Policy network (actor)
 class PolicyNetwork(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
@@ -22,7 +21,7 @@ class PolicyNetwork(nn.Module):
         x = torch.relu(self.fc2(x))
         return F.softmax(self.fc3(x), dim=-1)
 
-# Value network
+# Value network (critic)
 class ValueNetwork(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
@@ -35,14 +34,17 @@ class ValueNetwork(nn.Module):
         x = torch.relu(self.fc2(x))
         return self.fc3(x)
 
-# Actor-Critic Trainer
+# Actor-Critic Agent
 class ActorCriticAgent:
-    def __init__(self, env, gamma=0.99, tau=0.95, entropy_coef=0.01, batch_size=256):
+    def __init__(self, env, gamma=0.99, tau=0.95, entropy_coef=0.005, batch_size=128, update_iters=1):
         self.env = env
         self.gamma = gamma
         self.tau = tau
         self.entropy_coef = entropy_coef
+        self.entropy_decay = 0.995
+        self.min_entropy_coef = 0.001
         self.batch_size = batch_size
+        self.update_iters = update_iters
 
         self.obs_dim = env.observation_space.shape[0]
         self.act_dim = env.action_space.n
@@ -50,7 +52,7 @@ class ActorCriticAgent:
         self.policy_net = PolicyNetwork(self.obs_dim, self.act_dim).to(device)
         self.value_net = ValueNetwork(self.obs_dim).to(device)
 
-        self.policy_opt = optim.AdamW(self.policy_net.parameters(), lr=5e-4)
+        self.policy_opt = optim.AdamW(self.policy_net.parameters(), lr=1e-4)
         self.value_opt = optim.AdamW(self.value_net.parameters(), lr=5e-4)
 
         self.reset_buffers()
@@ -58,8 +60,7 @@ class ActorCriticAgent:
     def reset_buffers(self):
         self.states, self.actions = [], []
         self.rewards, self.dones = [], []
-        self.log_probs, self.values = [], []
-        self.next_states = []
+        self.values, self.next_states = [], []
 
     def select_action(self, state):
         state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)
@@ -97,23 +98,25 @@ class ActorCriticAgent:
         returns = advantages + values
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        logits = self.policy_net(states)
-        dist = torch.distributions.Categorical(logits)
-        new_log_probs = dist.log_prob(actions)
-        entropy = dist.entropy().mean()
+        for _ in range(self.update_iters):
+            logits = self.policy_net(states)
+            dist = torch.distributions.Categorical(logits)
+            new_log_probs = dist.log_prob(actions)
+            entropy = dist.entropy().mean()
 
-        policy_loss = -(new_log_probs * advantages.detach()).mean() - self.entropy_coef * entropy
-        value_preds = self.value_net(states).squeeze()
-        value_loss = F.mse_loss(value_preds, returns.detach())
+            policy_loss = -(new_log_probs * advantages.detach()).mean() - self.entropy_coef * entropy
+            value_preds = self.value_net(states).squeeze()
+            value_loss = F.mse_loss(value_preds, returns.detach())
 
-        self.policy_opt.zero_grad()
-        policy_loss.backward()
-        self.policy_opt.step()
+            self.policy_opt.zero_grad()
+            policy_loss.backward()
+            self.policy_opt.step()
 
-        self.value_opt.zero_grad()
-        value_loss.backward()
-        self.value_opt.step()
+            self.value_opt.zero_grad()
+            value_loss.backward()
+            self.value_opt.step()
 
+        self.entropy_coef = max(self.entropy_coef * self.entropy_decay, self.min_entropy_coef)
         self.reset_buffers()
 
     def train(self, total_steps=10**6):
@@ -132,7 +135,6 @@ class ActorCriticAgent:
             self.actions.append(action)
             self.rewards.append(reward)
             self.dones.append(float(done))
-            self.log_probs.append(log_prob)
             self.values.append(value)
             self.next_states.append(next_state)
 
@@ -154,59 +156,38 @@ class ActorCriticAgent:
 
         return avg_rewards
 
-# Training
+# Train the agent
 env = gym.make("CartPole-v1")
 agent = ActorCriticAgent(env)
 rewards = agent.train()
 
-
+ #Plotting
 plt.figure(figsize=(10, 5))
-
-# Convert rewards to a numpy array for easier manipulation
 rewards = np.array(rewards)
-
-
-window_size = 10  
+window_size = 10
 smoothed_rewards = np.convolve(rewards, np.ones(window_size)/window_size, mode='valid')
-x = np.linspace(1, 10, len(smoothed_rewards))  
-
-# Calculate the standard deviation over a rolling window to show variability
-
-std_window = 10 
+x = np.linspace(0, 1_000_000, len(smoothed_rewards)) / 100_000
 rolling_std = np.zeros(len(smoothed_rewards))
 for i in range(len(smoothed_rewards)):
-    start = max(0, i - std_window // 2)
-    end = min(len(rewards), i + std_window // 2 + 1)
+    start = max(0, i - window_size // 2)
+    end = min(len(rewards), i + window_size // 2 + 1)
     rolling_std[i] = np.std(rewards[start:end])
 
-
-plt.plot(x, smoothed_rewards, color='#4682B4', linewidth=2.5, label='Smoothed Avg Reward')  
-plt.fill_between(x, smoothed_rewards - rolling_std, smoothed_rewards + rolling_std, color='#4682B4', alpha=0.2, label='±1 Std Dev')
-
-
+plt.plot(x, smoothed_rewards, color='#4682B4', linewidth=2.5, label='Smoothed Avg Reward')
+plt.fill_between(x, smoothed_rewards - rolling_std, smoothed_rewards + rolling_std,
+                 color='#4682B4', alpha=0.2, label='±1 Std Dev')
 plt.title("Actor-Critic on CartPole-v1", fontsize=14, pad=15)
-plt.xlabel("Training Progress (Millions of Steps)", fontsize=12)
+plt.xlabel("Training Steps (x100k steps)", fontsize=12)
 plt.ylabel("Average Reward (last 50 episodes)", fontsize=12)
-
-
-plt.xticks(np.arange(1, 11), labels=[f"{i}M" for i in range(1, 11)])
-
-
-plt.yticks(np.arange(0, 501, 100))
+plt.xticks(fontsize=10)
+plt.yticks(fontsize=10)
 plt.ylim(0, 550)
-
-
 plt.grid(True, linestyle='--', alpha=0.4, color='gray')
-
-
-plt.gca().set_facecolor('#F5F5F5')  
-plt.gcf().set_facecolor('white')    
-plt.gca().spines['top'].set_visible(False)    
-plt.gca().spines['right'].set_visible(False)  
-plt.gca().spines['left'].set_color('gray')    
-plt.gca().spines['bottom'].set_color('gray')  
-
-# Style the legend
+plt.gca().set_facecolor('#F5F5F5')
+plt.gcf().set_facecolor('white')
+plt.gca().spines['top'].set_visible(False)
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['left'].set_color('gray')
+plt.gca().spines['bottom'].set_color('gray')
 plt.legend(loc='best', fontsize=10, framealpha=0.8, facecolor='white', edgecolor='gray')
-
 plt.show()
