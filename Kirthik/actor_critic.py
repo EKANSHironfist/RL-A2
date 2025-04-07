@@ -169,7 +169,7 @@ for i in range(len(smoothed_rewards)):
 plt.plot(x, smoothed_rewards, color='#4682B4', linewidth=2.5, label='Smoothed Avg Reward')
 plt.fill_between(x, smoothed_rewards - rolling_std, smoothed_rewards + rolling_std,
                  color='#4682B4', alpha=0.2, label='±1 Std Dev')
-plt.title("Critic on CartPole-v1", fontsize=14, pad=15)
+plt.title("Actor Critic on CartPole-v1", fontsize=14, pad=15)
 plt.xlabel("Training Steps (x100k steps)", fontsize=12)
 plt.ylabel("Average Reward (last 50 episodes)", fontsize=12)
 plt.xticks(fontsize=10)
