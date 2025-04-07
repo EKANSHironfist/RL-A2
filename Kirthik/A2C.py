@@ -7,39 +7,44 @@ import matplotlib.pyplot as plt
 import gym
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
 # Policy network (actor)
 class PolicyNetwork(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, 64)  # Increased to 64 units
-        self.fc2 = nn.Linear(64, output_dim)
+        self.fc1 = nn.Linear(input_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, output_dim)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
-        return F.softmax(self.fc2(x), dim=-1)
+        x = torch.relu(self.fc2(x))
+        return F.softmax(self.fc3(x), dim=-1)
 
 # Value network (critic)
 class ValueNetwork(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, 64)  # Increased to 64 units
-        self.fc2 = nn.Linear(64, 1)
+        self.fc1 = nn.Linear(input_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, 1)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
-        return self.fc2(x)
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
 
 # Actor-Critic Agent
 class ActorCriticAgent:
-    def __init__(self, env, gamma=0.99, entropy_coef=0.05, batch_size=256):  # Adjusted entropy_coef and batch_size
+    def __init__(self, env, gamma=0.99, tau=0.95, entropy_coef=0.005, batch_size=128, update_iters=1):
         self.env = env
         self.gamma = gamma
+        self.tau = tau
         self.entropy_coef = entropy_coef
         self.entropy_decay = 0.995
         self.min_entropy_coef = 0.001
         self.batch_size = batch_size
+        self.update_iters = update_iters
 
         self.obs_dim = env.observation_space.shape[0]
         self.act_dim = env.action_space.n
@@ -47,65 +52,71 @@ class ActorCriticAgent:
         self.policy_net = PolicyNetwork(self.obs_dim, self.act_dim).to(device)
         self.value_net = ValueNetwork(self.obs_dim).to(device)
 
-        self.policy_opt = optim.Adam(self.policy_net.parameters(), lr=7e-4)  # Adjusted learning rate
-        self.value_opt = optim.Adam(self.value_net.parameters(), lr=3e-3)  # Adjusted learning rate
+        self.policy_opt = optim.AdamW(self.policy_net.parameters(), lr=1e-4)
+        self.value_opt = optim.AdamW(self.value_net.parameters(), lr=5e-4)
 
         self.reset_buffers()
 
     def reset_buffers(self):
         self.states, self.actions = [], []
         self.rewards, self.dones = [], []
-        self.log_probs, self.values = [], []
-        self.entropies, self.next_states = [], []
+        self.values, self.next_states = [], []
 
     def select_action(self, state):
         state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)
         probs = self.policy_net(state_tensor)
         dist = torch.distributions.Categorical(probs)
         action = dist.sample()
-        return action.item(), dist.log_prob(action), dist.entropy(), self.value_net(state_tensor).squeeze()
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+        value = self.value_net(state_tensor).squeeze()
+        return action.item(), log_prob, entropy.item(), value.item()
+
+    def compute_gae(self, rewards, values, next_values, dones):
+        gae = 0
+        advs = []
+        for t in reversed(range(len(rewards))):
+            delta = rewards[t] + self.gamma * next_values[t] * (1 - dones[t]) - values[t]
+            gae = delta + self.gamma * self.tau * (1 - dones[t]) * gae
+            advs.insert(0, gae)
+        return torch.tensor(advs, dtype=torch.float32, device=device)
 
     def update(self):
         if len(self.states) < self.batch_size:
             return
 
-        # Convert buffers to tensors
         states = torch.tensor(np.array(self.states), dtype=torch.float32, device=device)
         actions = torch.tensor(self.actions, dtype=torch.int64, device=device)
         rewards = torch.tensor(self.rewards, dtype=torch.float32, device=device)
         dones = torch.tensor(self.dones, dtype=torch.float32, device=device)
-        log_probs = torch.stack(self.log_probs)
-        entropies = torch.stack(self.entropies)
-        values = torch.stack(self.values)
-        next_states = torch.tensor(np.array(self.next_states), dtype=torch.float32, device=device)
+        values = torch.tensor(self.values, dtype=torch.float32, device=device)
 
-        # Compute next values
-        next_values = self.value_net(next_states).squeeze().detach()
+        next_states_tensor = torch.tensor(np.array(self.next_states), dtype=torch.float32, device=device)
+        next_values = self.value_net(next_states_tensor).squeeze().detach()
 
-        # Compute advantages and targets
-        targets = rewards + self.gamma * next_values * (1 - dones)
-        advantages = targets - values
+        advantages = self.compute_gae(rewards, values, next_values, dones)
+        returns = advantages + values
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        # Actor loss (policy gradient)
-        policy_loss = -(log_probs * advantages.detach()).mean() - self.entropy_coef * entropies.mean()
+        for _ in range(self.update_iters):
+            logits = self.policy_net(states)
+            dist = torch.distributions.Categorical(logits)
+            new_log_probs = dist.log_prob(actions)
+            entropy = dist.entropy().mean()
 
-        # Critic loss (value function)
-        value_loss = F.mse_loss(values, targets.detach())
+            policy_loss = -(new_log_probs * advantages.detach()).mean() - self.entropy_coef * entropy
+            value_preds = self.value_net(states).squeeze()
+            value_loss = F.mse_loss(value_preds, returns.detach())
 
-        # Update policy network
-        self.policy_opt.zero_grad()
-        policy_loss.backward()
-        self.policy_opt.step()
+            self.policy_opt.zero_grad()
+            policy_loss.backward()
+            self.policy_opt.step()
 
-        # Update value network
-        self.value_opt.zero_grad()
-        value_loss.backward()
-        self.value_opt.step()
+            self.value_opt.zero_grad()
+            value_loss.backward()
+            self.value_opt.step()
 
-        # Decay entropy coefficient
         self.entropy_coef = max(self.entropy_coef * self.entropy_decay, self.min_entropy_coef)
-
-        # Clear buffers
         self.reset_buffers()
 
     def train(self, total_steps=10**6):
@@ -120,13 +131,10 @@ class ActorCriticAgent:
             next_state, reward, term, trunc, _ = self.env.step(action)
             done = term or trunc
 
-            # Store transition in buffers
             self.states.append(state)
             self.actions.append(action)
             self.rewards.append(reward)
             self.dones.append(float(done))
-            self.log_probs.append(log_prob)
-            self.entropies.append(entropy)
             self.values.append(value)
             self.next_states.append(next_state)
 
@@ -138,7 +146,6 @@ class ActorCriticAgent:
                 reward_records.append(total_reward)
                 total_reward = 0
 
-            # Update after collecting a batch
             if len(self.states) >= self.batch_size:
                 self.update()
 
@@ -154,10 +161,10 @@ env = gym.make("CartPole-v1")
 agent = ActorCriticAgent(env)
 rewards = agent.train()
 
-# Plotting
+ #Plotting
 plt.figure(figsize=(10, 5))
 rewards = np.array(rewards)
-window_size = 20  # Increased for more smoothing
+window_size = 10
 smoothed_rewards = np.convolve(rewards, np.ones(window_size)/window_size, mode='valid')
 x = np.linspace(0, 1_000_000, len(smoothed_rewards)) / 100_000
 rolling_std = np.zeros(len(smoothed_rewards))
@@ -169,7 +176,7 @@ for i in range(len(smoothed_rewards)):
 plt.plot(x, smoothed_rewards, color='#4682B4', linewidth=2.5, label='Smoothed Avg Reward')
 plt.fill_between(x, smoothed_rewards - rolling_std, smoothed_rewards + rolling_std,
                  color='#4682B4', alpha=0.2, label='±1 Std Dev')
-plt.title("Actor Critic on CartPole-v1", fontsize=14, pad=15)
+plt.title("A2C on CartPole-v1", fontsize=14, pad=15)
 plt.xlabel("Training Steps (x100k steps)", fontsize=12)
 plt.ylabel("Average Reward (last 50 episodes)", fontsize=12)
 plt.xticks(fontsize=10)
