@@ -1,44 +1,55 @@
-# Utils/plotting.py
+# plotting.py
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 
 def plot_learning_curves(all_results, filename):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    def smooth_curve(points, factor=0.9):
-        smoothed = []
-        last = points[0]
-        for point in points:
-            last = last * factor + (1 - factor) * point
-            smoothed.append(last)
-        return smoothed
-
     plt.figure(figsize=(12, 6))
 
-    for algo_name, rewards in all_results.items():
-        # Make all reward lists the same length
-        min_len = min(len(run) for run in rewards)
-        for i in range(len(rewards)):
-            rewards[i] = rewards[i][:min_len]
+    for algo_name, step_rewards_list in all_results.items():
+        # step_rewards_list is a list of runs, where each run is a list of (step, avg_reward) pairs
+        # Interpolate to a common set of steps for averaging across runs
+        max_steps = max(step for run in step_rewards_list for step, _ in run)
+        common_steps = np.arange(0, max_steps + 1000, 1000)  # Steps at intervals of 1,000
         
-        rewards = np.array(rewards)  # shape: [runs, episodes]
+        # Interpolate rewards for each run at common steps
+        interpolated_rewards = []
+        for run in step_rewards_list:
+            steps, rewards = zip(*run)  # Unpack (step, avg_reward) pairs
+            steps = np.array(steps)
+            rewards = np.array(rewards)
+            # Interpolate rewards at common_steps
+            interpolated = np.interp(common_steps, steps, rewards)
+            interpolated_rewards.append(interpolated)
         
-        if len(rewards) < 2:
+        interpolated_rewards = np.array(interpolated_rewards)  # Shape: [runs, num_steps]
+        
+        if len(interpolated_rewards) < 2:
             print(f"Skipping {algo_name}: Not enough data to plot.")
             continue
 
-        # Fix here: average across runs
-        mean_rewards = np.mean(rewards, axis=0)
+        # Average across runs
+        mean_rewards = np.mean(interpolated_rewards, axis=0)
+        std_rewards = np.std(interpolated_rewards, axis=0)
+        
+        # Smooth the mean rewards
+        def smooth_curve(points, factor=0.9):
+            smoothed = []
+            last = points[0]
+            for point in points:
+                last = last * factor + (1 - factor) * point
+                smoothed.append(last)
+            return smoothed
+        
         smoothed_mean = smooth_curve(mean_rewards)
-
-        x = np.arange(len(smoothed_mean))
+        
+        # Plot: x-axis in units of 100k steps
+        x = common_steps / 100000  # Convert steps to 100k steps
         plt.plot(x, smoothed_mean, label=algo_name)
+        plt.fill_between(x, smoothed_mean - std_rewards, smoothed_mean + std_rewards, alpha=0.2)
 
-
-    plt.xlabel("Episodes")
-    plt.ylabel("Total Reward")
+    plt.xlabel("Training Steps (x100K steps)")
+    plt.ylabel("Average Reward (last 50 episodes)")
     plt.title("Learning Curves Comparison")
     plt.legend()
     plt.grid(True)
@@ -52,12 +63,9 @@ def plot_comparison_boxplot(results_dict, filename):
     data = []
     labels = []
     
-    for algo_name, rewards_list in results_dict.items():
-        if isinstance(rewards_list[0], list):
-            final_performances = [np.mean(run[-len(run)//10:]) for run in rewards_list]
-        else:
-            final_performances = [np.mean(rewards_list[-len(rewards_list)//10:])]
-        
+    for algo_name, step_rewards_list in results_dict.items():
+        # Take the last reward value from each run
+        final_performances = [run[-1][1] for run in step_rewards_list]  # run[-1][1] is the last avg_reward
         data.append(final_performances)
         labels.append(algo_name)
     
@@ -68,4 +76,4 @@ def plot_comparison_boxplot(results_dict, filename):
     
     os.makedirs('results', exist_ok=True)
     plt.savefig(f"results/{filename}")
-    
+   
