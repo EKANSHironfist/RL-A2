@@ -39,8 +39,10 @@ class PPO:
         return returns
     
     def train(self, max_steps=200000, batch_size=5):
-        all_rewards = []
+        reward_records = []  # Store total reward per episode
+        step_rewards = []  # Store (step, avg_reward) pairs
         total_steps = 0
+        episode = 0
 
         while total_steps < max_steps:
             state, _ = self.env.reset()
@@ -68,43 +70,49 @@ class PPO:
                 total_steps += 1
                 episode_steps += 1
                 
-                # if total_steps >= max_steps:
-                #     break
+                # Record average reward every 1,000 steps
+                if total_steps % 1000 == 0:
+                    avg_reward = np.mean(reward_records[-50:]) if reward_records else 0
+                    step_rewards.append((total_steps, avg_reward))
             
-            if total_steps <= max_steps:
-                states = torch.FloatTensor(np.array(states)).to(self.device)
-                actions = torch.LongTensor(actions).to(self.device)
-                old_log_probs = torch.FloatTensor(log_probs).to(self.device)
-                returns = torch.FloatTensor(self.compute_returns(rewards, masks)).to(self.device)
+            if total_steps >= max_steps:
+                break
 
-                for _ in range(batch_size):
-                    values = self.value_net(states).squeeze(-1)
-                    advantages = returns - values.detach()
+            # Perform PPO update
+            states = torch.FloatTensor(np.array(states)).to(self.device)
+            actions = torch.LongTensor(actions).to(self.device)
+            old_log_probs = torch.FloatTensor(log_probs).to(self.device)
+            returns = torch.FloatTensor(self.compute_returns(rewards, masks)).to(self.device)
 
-                    action_probs = self.policy_net(states)
-                    dist = torch.distributions.Categorical(action_probs)
-                    curr_log_probs = dist.log_prob(actions)
+            for _ in range(batch_size):
+                values = self.value_net(states).squeeze(-1)
+                advantages = returns - values.detach()
 
-                    ratios = torch.exp(curr_log_probs - old_log_probs)
-                    surr1 = ratios * advantages
-                    surr2 = torch.clamp(ratios, 1 - self.clip_eps, 1 + self.clip_eps) * advantages
+                action_probs = self.policy_net(states)
+                dist = torch.distributions.Categorical(action_probs)
+                curr_log_probs = dist.log_prob(actions)
 
-                    policy_loss = -torch.min(surr1, surr2).mean()
-                    value_loss = F.mse_loss(values, returns)
+                ratios = torch.exp(curr_log_probs - old_log_probs)
+                surr1 = ratios * advantages
+                surr2 = torch.clamp(ratios, 1 - self.clip_eps, 1 + self.clip_eps) * advantages
 
-                    self.policy_optimizer.zero_grad()
-                    policy_loss.backward()
-                    self.policy_optimizer.step()
+                policy_loss = -torch.min(surr1, surr2).mean()
+                value_loss = F.mse_loss(values, returns)
 
-                    self.value_optimizer.zero_grad()
-                    value_loss.backward()
-                    self.value_optimizer.step()
+                self.policy_optimizer.zero_grad()
+                policy_loss.backward()
+                self.policy_optimizer.step()
 
-                all_rewards.append(episode_reward)
+                self.value_optimizer.zero_grad()
+                value_loss.backward()
+                self.value_optimizer.step()
 
-            if len(all_rewards) % 10 == 0:
-                avg_reward = np.mean(all_rewards[-10:])
-                print(f"Steps: {total_steps}, Episode: {len(all_rewards)}, Avg Reward: {avg_reward:.1f}")
+            reward_records.append(episode_reward)
+            episode += 1
 
-        return all_rewards
+            # Log Progress
+            if episode % 10 == 0:
+                avg_reward = np.mean(reward_records[-10:])
+                print(f"Steps: {total_steps}, Episode: {episode}, Avg Reward: {avg_reward:.1f}")
 
+        return step_rewards 
