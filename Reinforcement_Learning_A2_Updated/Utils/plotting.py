@@ -43,7 +43,7 @@ def plot_learning_curves(all_results, filename):
     plt.legend()
     plt.grid(True)
     plt.savefig(filename)
-    plt.close()
+    plt.show()
 
 def plot_comparison_boxplot(results_dict, filename):  
     plt.figure(figsize=(10, 6))
@@ -68,4 +68,4 @@ def plot_comparison_boxplot(results_dict, filename):
     
     os.makedirs('results', exist_ok=True)
     plt.savefig(f"results/{filename}")
-    plt.show()
+    
