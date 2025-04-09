@@ -31,8 +31,10 @@ class A2C:
         return action.item(), log_prob, state_value
     
     def train(self, max_steps=200000):
-        all_episode_rewards = []
+        reward_records = []  # Store total reward per episode
+        step_rewards = []  # Store (step, avg_reward) pairs
         total_steps = 0
+        episode = 0
 
         while total_steps < max_steps:
             state, _ = self.env.reset()
@@ -53,9 +55,14 @@ class A2C:
                 total_steps += 1
                 episode_reward += reward
                 state = next_state
+                
+                # Record average reward every 1,000 steps
+                if total_steps % 1000 == 0:
+                    avg_reward = np.mean(reward_records[-50:]) if reward_records else 0
+                    step_rewards.append((total_steps, avg_reward))
             
-            if total_steps > max_steps:
-                    break
+            if total_steps >= max_steps:
+                break
 
             returns = []
             R = 0
@@ -78,10 +85,11 @@ class A2C:
             self.policy_optimizer.step()
             self.value_optimizer.step()
 
-            all_episode_rewards.append(episode_reward)
+            reward_records.append(episode_reward)
+            episode += 1
 
-            if len(all_episode_rewards) % 10 == 0:
-                avg_reward = np.mean(all_episode_rewards[-10:])
-                print(f"Steps: {total_steps}, Episode: {len(all_episode_rewards)}, Avg Reward: {avg_reward:.1f}")
+            if episode % 10 == 0:
+                avg_reward = np.mean(reward_records[-10:])
+                print(f"Steps: {total_steps}, Episode: {episode}, Avg Reward: {avg_reward:.1f}")
 
-        return all_episode_rewards
+        return step_rewards  # Return list of (step, avg_reward) pairs
