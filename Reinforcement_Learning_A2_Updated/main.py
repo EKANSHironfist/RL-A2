@@ -1,3 +1,4 @@
+# main.py
 import gymnasium as gym
 import torch
 import random
@@ -18,7 +19,7 @@ def set_seeds(seed=42):
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         
-def run_algorithm(algo_name, num_runs=5, max_steps = 200000, seed=42):
+def run_algorithm(algo_name, num_runs=1, max_steps=200000, seed=42):
     results = []
     
     # Map input algorithm names to standard formats
@@ -53,25 +54,20 @@ def run_algorithm(algo_name, num_runs=5, max_steps = 200000, seed=42):
         else:
             raise ValueError(f"Unknown Algorithm: {algo_name}")
         
-        rewards = agent.train(max_steps=max_steps)
-        results.append(rewards)
+        step_rewards = agent.train(max_steps=max_steps)  # Now returns list of (step, avg_reward) pairs
+        results.append(step_rewards)
         env.close()
     
-    # Save Results - Fix for variable length arrays
+    # Save Results
     os.makedirs('results', exist_ok=True)
-    
-    # Convert to list of lists first (don't try to convert directly to numpy array)
-    results_list = [list(r) for r in results]
-    
-    # Save as a pickle file instead
     import pickle
     with open(f"results/{algo_name}_rewards.pkl", 'wb') as f:
-        pickle.dump(results_list, f)
+        pickle.dump(results, f)
     
     return results
 
-def run_all_algorithms(num_runs=5, max_steps = 200000, seed=42):
-    algorithms = ["REINFORCE", "ActorCritic", "A2C", "DQNAgent", "PPO"]
+def run_all_algorithms(num_runs=1, max_steps=200000, seed=42):
+    algorithms = ["REINFORCE","PPO","ActorCritic","A2C","DQNAgent"]
     all_results = {}
     
     for algo in algorithms:
@@ -84,10 +80,10 @@ def run_all_algorithms(num_runs=5, max_steps = 200000, seed=42):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='RL Algorithm Comparison')
     parser.add_argument("--algorithm", type=str, default="all", 
-                    choices=["reinforce", "actor_critic", "a2c", "dqn", "ppo", "all"],
-                    help="which algorithm to run")
+                        choices=["reinforce", "actor_critic", "a2c", "dqn", "ppo", "all"],
+                        help="which algorithm to run")
     parser.add_argument("--runs", type=int, default=5, help="Number of runs per algorithm")
-    parser.add_argument("--steps", type=int, default=200000, help="Number of environment steps per run")
+    parser.add_argument("--steps", type=int, default=1000000, help="Number of environment steps per run")
     parser.add_argument("--seed", type=int, default=42, help="Random seeds")
     args = parser.parse_args()
     
