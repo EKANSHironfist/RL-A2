@@ -32,10 +32,13 @@ Graphs of all algorithms are plotted using plot_learning_curves function in `plo
 
 ### 🔁 Run All Algorithms
 
-You can run all algorithms sequentially using:
+To run all available algorithms sequentially:
 
 ```bash
 python main.py
+```
+
+This script trains each algorithm and saves reward statistics for visualization.
 
 ## 📦 Dependencies
 
