@@ -36,3 +36,11 @@ You can run all algorithms sequentially using:
 
 ```bash
 python main.py
+
+## 📦 Dependencies
+
+Install required packages with:
+
+```bash
+pip install torch numpy matplotlib gymnasium
+```
