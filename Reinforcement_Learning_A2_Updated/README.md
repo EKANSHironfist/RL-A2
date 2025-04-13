@@ -45,5 +45,5 @@ This script trains each algorithm and saves reward statistics for visualization.
 Install required packages with:
 
 ```bash
-pip install torch numpy matplotlib gymnasium
+pip install -r requirements.txt
 ```
