@@ -2,6 +2,21 @@
 
 This project implements several core reinforcement learning (RL) algorithms using PyTorch and OpenAI Gym environments. 
 
+## 📁 Project Structure
+
+```
+.
+├── ppo.py           # Proximal Policy Optimization (PPO)
+├── dqn.py           # Deep Q-Network (DQN)
+├── ac.py            # Basic Actor-Critic
+├── a2c.py           # Advantage Actor-Critic (A2C)
+├── reinforce.py     # REINFORCE (Monte Carlo Policy Gradient)
+├── networks.py      # Shared policy and value network definitions
+├── plotting.py      # Plotting utility for visualizing training progress
+├── main.py          # Runs all algorithms in a single script
+├── README.md        # Project documentation
+```
+
 ## 🧠 Implemented Algorithms
 
 - **DQN**: Deep Q-Network with experience replay and a target network.
